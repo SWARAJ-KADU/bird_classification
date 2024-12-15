@@ -7,13 +7,20 @@ from data_loaders import get_dataloaders
 from checkpoints import save_checkpoint, load_checkpoint
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
-
+from sklearn.metrics import precision_score, recall_score
+from plot_metrices import plot_metrics
 
 # Training Function with Checkpoint Integration
 def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=10, device='cuda', checkpoint_path="checkpoint.pth"):
     model.to(device)
     # Load checkpoint if available
     model, optimizer, scheduler, start_epoch = load_checkpoint(checkpoint_path, model, optimizer, scheduler, device)
+    # Lists to store metrics for each epoch
+    train_losses, val_losses = [], []
+    train_accuracies, val_accuracies = [], []
+    train_precisions, val_precisions = [], []
+    train_recalls, val_recalls = [], []
+    train_f1s, val_f1s = [], []
 
     for epoch in range(start_epoch, num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
@@ -27,6 +34,8 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
 
             running_loss = 0.0
             running_corrects = 0
+            all_labels = []
+            all_preds = []
 
             for inputs, labels in dataloaders[phase]:
                 inputs, labels = inputs.to(device), labels.to(device)
@@ -44,10 +53,17 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
                 running_loss += loss.item() * inputs.size(0)
                 running_corrects += torch.sum(preds == labels.data)
 
+                all_labels.extend(labels.cpu().numpy())
+                all_preds.extend(preds.cpu().numpy())
+
             epoch_loss = running_loss / len(dataloaders[phase].dataset)
             epoch_acc = running_corrects.double() / len(dataloaders[phase].dataset)
 
-            print(f"{phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
+            # Calculate Precision, Recall, F1 Score
+            precision = precision_score(all_labels, all_preds, average='weighted', zero_division=1)
+            recall = recall_score(all_labels, all_preds, average='weighted', zero_division=1)
+
+            print(f"{phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f} Precision: {precision:.4f} Recall: {recall:.4f}")
 
         # Step the scheduler after each epoch
         scheduler.step()
@@ -61,7 +77,7 @@ def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=
         }
         save_checkpoint(checkpoint, checkpoint_path)
 
-    return model
+    return model, (train_losses, val_losses, train_accuracies, val_accuracies, train_precisions, val_precisions, train_recalls, val_recalls, train_f1s, val_f1s)
 
 
 # Main Function
@@ -97,7 +113,7 @@ if __name__ == "__main__":
     scheduler = StepLR(optimizer, step_size=10, gamma=0.1)  # Decrease LR by a factor of 10 every 10 epochs
 
     # Train the Model
-    trained_model = train_model(
+    trained_model, metrices = train_model(
         model,
         dataloaders,
         criterion,
@@ -107,5 +123,6 @@ if __name__ == "__main__":
         checkpoint_path=checkpoint_path
     )
 
+    plot_metrics(*metrices)
     # Save final model
     torch.save(trained_model.state_dict(), "bird_classifier.pth")
