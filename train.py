@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-import torch
+from torch.optim.lr_scheduler import StepLR  # Learning rate scheduler
 from model import BirdClassifier
 from data_loaders import get_dataloaders
 from checkpoints import save_checkpoint, load_checkpoint
@@ -10,10 +10,10 @@ from sklearn.preprocessing import LabelEncoder
 
 
 # Training Function with Checkpoint Integration
-def train_model(model, dataloaders, criterion, optimizer, num_epochs=10, device='cuda', checkpoint_path="checkpoint.pth"):
+def train_model(model, dataloaders, criterion, optimizer, scheduler, num_epochs=10, device='cuda', checkpoint_path="checkpoint.pth"):
     model.to(device)
     # Load checkpoint if available
-    model, optimizer, start_epoch = load_checkpoint(checkpoint_path, model, optimizer, device)
+    model, optimizer, scheduler, start_epoch = load_checkpoint(checkpoint_path, model, optimizer, scheduler, device)
 
     for epoch in range(start_epoch, num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
@@ -49,11 +49,15 @@ def train_model(model, dataloaders, criterion, optimizer, num_epochs=10, device=
 
             print(f"{phase.capitalize()} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}")
 
+        # Step the scheduler after each epoch
+        scheduler.step()
+
         # Save a checkpoint after each epoch
         checkpoint = {
             'epoch': epoch + 1,
             'model_state': model.state_dict(),
             'optimizer_state': optimizer.state_dict(),
+            'scheduler_state': scheduler.state_dict(),
         }
         save_checkpoint(checkpoint, checkpoint_path)
 
@@ -65,9 +69,10 @@ if __name__ == "__main__":
     # Hyperparameters
     data_dir = "image_vectors_labels.pkl"  # Path to dataset (train and val folders)
     num_classes = 200
-    batch_size = 16
+    batch_size = 32
     learning_rate = 1e-4
     num_epochs = 30
+    weight_decay = 1e-5  # Weight decay (L2 regularization)
     checkpoint_path = "bird_classifier_checkpoint.pth"
 
     df = pd.read_pickle(data_dir)
@@ -78,13 +83,18 @@ if __name__ == "__main__":
     label_vector = df['label']
 
     # Data Preparation
-    train_loader, val_loader = get_dataloaders(image_vector, label_vector, batch_size, 0.2)
+    train_loader, val_loader = get_dataloaders(image_vector, label_vector, batch_size, 0.35)
     dataloaders = {'train': train_loader, 'val': val_loader}
 
     # Model, Loss, and Optimizer
     model = BirdClassifier(num_classes=num_classes)
     criterion = nn.CrossEntropyLoss()   
-    optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate)
+
+    # Adam optimizer with weight decay
+    optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate, weight_decay=weight_decay)
+
+    # Learning rate scheduler (StepLR)
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.1)  # Decrease LR by a factor of 10 every 10 epochs
 
     # Train the Model
     trained_model = train_model(
@@ -92,6 +102,7 @@ if __name__ == "__main__":
         dataloaders,
         criterion,
         optimizer,
+        scheduler,
         num_epochs=num_epochs,
         checkpoint_path=checkpoint_path
     )
